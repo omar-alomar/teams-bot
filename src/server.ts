@@ -14,16 +14,35 @@ import {
 const PORT = Number(process.env.PORT) || 3978;
 const APP_ID = process.env.MS_APP_ID!;
 const APP_PASSWORD = process.env.MS_APP_PASSWORD!;
-const APP_TENANT = process.env.MS_APP_TENANT_ID!;   // required for SingleTenant
-const APP_TYPE = process.env.MS_APP_TYPE || 'SingleTenant'; // SingleTenant | MultiTenant
+const APP_TENANT = process.env.MS_APP_TENANT_ID;   // optional, required for SingleTenant
+const APP_TYPE = (process.env.MS_APP_TYPE || 'MultiTenant') as 'SingleTenant' | 'MultiTenant';
+
+// Validate configuration
+if (APP_TYPE === 'SingleTenant' && !APP_TENANT) {
+  throw new Error(
+    'MS_APP_TENANT_ID is required when MS_APP_TYPE is SingleTenant. ' +
+    'Either set MS_APP_TENANT_ID in your .env file or change MS_APP_TYPE to MultiTenant.'
+  );
+}
 
 // ---------- ADAPTER (tenant-aware) ----------
-const credFactory = new ConfigurationServiceClientCredentialFactory({
+const credFactoryConfig: {
+  MicrosoftAppId: string;
+  MicrosoftAppPassword: string;
+  MicrosoftAppType: 'SingleTenant' | 'MultiTenant';
+  MicrosoftAppTenantId?: string;
+} = {
   MicrosoftAppId: APP_ID,
   MicrosoftAppPassword: APP_PASSWORD,
-  MicrosoftAppTenantId: APP_TENANT,
   MicrosoftAppType: APP_TYPE,
-});
+};
+
+// Only include tenant ID if provided (required for SingleTenant, optional for MultiTenant)
+if (APP_TENANT) {
+  credFactoryConfig.MicrosoftAppTenantId = APP_TENANT;
+}
+
+const credFactory = new ConfigurationServiceClientCredentialFactory(credFactoryConfig);
 const bfa = createBotFrameworkAuthenticationFromConfiguration(null, credFactory);
 const adapter = new CloudAdapter(bfa);
 
@@ -117,7 +136,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log('APP_ID:', APP_ID);
-  console.log('TENANT:', APP_TENANT);
+  console.log('TENANT:', APP_TENANT || '(not set - using MultiTenant)');
   console.log('TYPE:', APP_TYPE);
   console.log(`Bot listening on port ${PORT}`);
 });
