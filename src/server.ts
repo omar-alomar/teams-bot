@@ -14,9 +14,22 @@ const PORT = Number(process.env.PORT) || 3978;
 
 // Core logic: just echo text for now
 async function onTurn(context: TurnContext) {
+  // Log incoming activity details
+  console.log('\n=== Incoming Activity ===');
+  console.log('Type:', context.activity.type);
+  console.log('From:', context.activity.from?.name || context.activity.from?.id || 'Unknown');
+  console.log('Channel:', context.activity.channelId);
+  console.log('Conversation ID:', context.activity.conversation?.id || 'N/A');
+  
   if (context.activity.type === 'message') {
     const text = (context.activity.text || '').trim();
+    console.log('Message Text:', text);
+    console.log('Timestamp:', context.activity.timestamp || 'N/A');
+    console.log('========================\n');
     await context.sendActivity(`Echo: ${text}`);
+  } else {
+    console.log('Activity Data:', JSON.stringify(context.activity, null, 2));
+    console.log('========================\n');
   }
 }
 
@@ -78,12 +91,32 @@ const server = http.createServer(async (req, res) => {
   // Teams webhook endpoint
   if (req.method === 'POST' && req.url === '/api/teams/messages') {
     try {
+      console.log('\n📨 Teams webhook received');
+      console.log('Headers:', JSON.stringify(req.headers, null, 2));
+      
       const body = await readRequestBody(req);
+      console.log('Raw body received:', body);
+      
       const webReq = createWebRequest(req, body);
+      
+      // Log parsed activity if available
+      if (webReq.body) {
+        console.log('\n📋 Parsed Activity:');
+        console.log('- Type:', webReq.body.type);
+        console.log('- From:', webReq.body.from?.name || webReq.body.from?.id || 'Unknown');
+        if (webReq.body.text) {
+          console.log('- Text:', webReq.body.text);
+        }
+        console.log('- Full Activity:', JSON.stringify(webReq.body, null, 2));
+      }
+      
       const webRes = createWebResponse(res);
       await adapter.processActivity(webReq, webRes, async (context) => onTurn(context));
     } catch (error) {
-      console.error('Error processing activity:', error);
+      console.error('\n❌ Error processing activity:', error);
+      if (error instanceof Error) {
+        console.error('Error stack:', error.stack);
+      }
       res.statusCode = 500;
       res.end();
     }
