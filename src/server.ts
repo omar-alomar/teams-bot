@@ -52,11 +52,15 @@ function createWebRequest(req: IncomingMessage, body: string): WebRequest {
     on: req.on.bind(req),
   } as unknown as WebRequest;
 }
-function createWebResponse(res: ServerResponse): WebResponse {
+function createWebResponse(res: ServerResponse) {
   return {
-    socket: res.socket as any,
+    socket: res.socket || ({} as any),
     end: (...args: any[]) => {
       res.end(...(args as [any]));
+      return res as any;
+    },
+    header: (name: string, value: unknown) => {
+      res.setHeader(name, value as string | string[]);
       return res as any;
     },
     send: (body: any) => {
@@ -69,7 +73,7 @@ function createWebResponse(res: ServerResponse): WebResponse {
       res.statusCode = status;
       return res as any;
     },
-  } as unknown as WebResponse;
+  };
 }
 
 // ---------- HTTP server ----------
@@ -96,7 +100,9 @@ const server = http.createServer(async (req, res) => {
         console.log('Message Text:', webReq.body.text);
       }
 
-      await adapter.processActivity(webReq, webRes, (ctx) => bot.run(ctx));
+      await adapter.process(webReq, webRes, async (ctx) => {
+        await bot.run(ctx);
+      });
     } catch (e) {
       console.error('processActivity error:', e);
       res.statusCode = 500;
