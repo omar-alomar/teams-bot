@@ -1,122 +1,104 @@
 import 'dotenv/config';
-import http from 'http';
-import { IncomingMessage, ServerResponse } from 'http';
-import { BotFrameworkAdapter, TurnContext, WebRequest, WebResponse } from 'botbuilder';
+import http, { IncomingMessage, ServerResponse } from 'http';
+import {
+  ActivityHandler,
+  CloudAdapter,
+  ConfigurationServiceClientCredentialFactory,
+  createBotFrameworkAuthenticationFromConfiguration,
+  TurnContext,
+  WebRequest,
+  WebResponse,
+} from 'botbuilder';
 
+// ---------- ENV ----------
+const PORT = Number(process.env.PORT) || 3978;
+const APP_ID = process.env.MS_APP_ID!;
+const APP_PASSWORD = process.env.MS_APP_PASSWORD!;
+const APP_TENANT = process.env.MS_APP_TENANT_ID!;   // required for SingleTenant
+const APP_TYPE = process.env.MS_APP_TYPE || 'SingleTenant'; // SingleTenant | MultiTenant
 
-// Adapter with creds from .env
-const adapter = new BotFrameworkAdapter({
-  appId: process.env.MS_APP_ID,
-  appPassword: process.env.MS_APP_PASSWORD,
+// ---------- ADAPTER (tenant-aware) ----------
+const credFactory = new ConfigurationServiceClientCredentialFactory({
+  MicrosoftAppId: APP_ID,
+  MicrosoftAppPassword: APP_PASSWORD,
+  MicrosoftAppTenantId: APP_TENANT,
+  MicrosoftAppType: APP_TYPE,
+});
+const bfa = createBotFrameworkAuthenticationFromConfiguration(null, credFactory);
+const adapter = new CloudAdapter(bfa);
+
+// ---------- BOT ----------
+const bot = new ActivityHandler();
+bot.onMessage(async (context: TurnContext, next) => {
+  const txt = (context.activity.text || '').trim();
+  await context.sendActivity(`Echo: ${txt}`);
+  await next();
 });
 
-const PORT = Number(process.env.PORT) || 3978;
-
-// Core logic: just echo text for now
-async function onTurn(context: TurnContext) {
-  // Log incoming activity details
-  console.log('\n=== Incoming Activity ===');
-  console.log('Type:', context.activity.type);
-  console.log('From:', context.activity.from?.name || context.activity.from?.id || 'Unknown');
-  console.log('Channel:', context.activity.channelId);
-  console.log('Conversation ID:', context.activity.conversation?.id || 'N/A');
-  
-  if (context.activity.type === 'message') {
-    const text = (context.activity.text || '').trim();
-    console.log('Message Text:', text);
-    console.log('Timestamp:', context.activity.timestamp || 'N/A');
-    console.log('========================\n');
-    await context.sendActivity(`Echo: ${text}`);
-  } else {
-    console.log('Activity Data:', JSON.stringify(context.activity, null, 2));
-    console.log('========================\n');
-  }
-}
-
-// Helper to read request body as string
+// ---------- Helpers (keep your light wrappers) ----------
 function readRequestBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let body = '';
-    req.on('data', (chunk) => {
-      body += chunk.toString();
-    });
-    req.on('end', () => {
-      resolve(body);
-    });
+    req.on('data', (chunk) => (body += chunk.toString()));
+    req.on('end', () => resolve(body));
     req.on('error', reject);
   });
 }
-
-// Wrap native request to match WebRequest interface
 function createWebRequest(req: IncomingMessage, body: string): WebRequest {
   return {
     body: body ? JSON.parse(body) : undefined,
     headers: req.headers,
     method: req.method,
     on: req.on.bind(req),
-  };
+  } as unknown as WebRequest;
 }
-
-// Wrap native response to match WebResponse interface
 function createWebResponse(res: ServerResponse): WebResponse {
   return {
-    socket: res.socket,
+    socket: res.socket as any,
     end: (...args: any[]) => {
-      res.end(...args);
-      return res;
+      res.end(...(args as [any]));
+      return res as any;
     },
     send: (body: any) => {
-      if (!res.headersSent) {
-        res.setHeader('Content-Type', 'application/json');
-      }
-      res.write(JSON.stringify(body));
+      if (!res.headersSent) res.setHeader('Content-Type', 'application/json');
+      res.write(typeof body === 'string' ? body : JSON.stringify(body));
       res.end();
-      return res;
+      return res as any;
     },
     status: (status: number) => {
       res.statusCode = status;
-      return res;
+      return res as any;
     },
-  };
+  } as unknown as WebResponse;
 }
 
-// Basic HTTP server (no Express)
+// ---------- HTTP server ----------
 const server = http.createServer(async (req, res) => {
-  // Health check
+  // Health
   if (req.method === 'GET' && req.url === '/healthz') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     return res.end('ok');
   }
 
-  // Teams webhook endpoint
+  // Teams webhook
   if (req.method === 'POST' && req.url === '/api/teams/messages') {
     try {
-      console.log('\n📨 Teams webhook received');
-      console.log('Headers:', JSON.stringify(req.headers, null, 2));
-      
-      const body = await readRequestBody(req);
-      console.log('Raw body received:', body);
-      
-      const webReq = createWebRequest(req, body);
-      
-      // Log parsed activity if available
-      if (webReq.body) {
-        console.log('\n📋 Parsed Activity:');
-        console.log('- Type:', webReq.body.type);
-        console.log('- From:', webReq.body.from?.name || webReq.body.from?.id || 'Unknown');
-        if (webReq.body.text) {
-          console.log('- Text:', webReq.body.text);
-        }
-        console.log('- Full Activity:', JSON.stringify(webReq.body, null, 2));
-      }
-      
+      const raw = await readRequestBody(req);
+      const webReq = createWebRequest(req, raw);
       const webRes = createWebResponse(res);
-      await adapter.processActivity(webReq, webRes, async (context) => onTurn(context));
-    } catch (error) {
-      console.error('\n❌ Error processing activity:', error);
-      if (error instanceof Error) {
-        console.error('Error stack:', error.stack);
+
+      // optional: log basic activity info
+      if (webReq.body) {
+        console.log('\n=== Incoming Activity ===');
+        console.log('Type:', webReq.body.type);
+        console.log('From:', webReq.body.from?.name || webReq.body.from?.id);
+        console.log('Channel:', webReq.body.channelId);
+        console.log('Message Text:', webReq.body.text);
       }
+
+      await adapter.processActivity(webReq, webRes, (ctx) => bot.run(ctx));
+    } catch (e) {
+      console.error('processActivity error:', e);
       res.statusCode = 500;
       res.end();
     }
@@ -127,7 +109,9 @@ const server = http.createServer(async (req, res) => {
   res.end();
 });
 
-// Start
-server.listen(PORT, '0.0.0.0', () =>
-  console.log(`Bot listening on port ${PORT}`)
-);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log('APP_ID:', APP_ID);
+  console.log('TENANT:', APP_TENANT);
+  console.log('TYPE:', APP_TYPE);
+  console.log(`Bot listening on port ${PORT}`);
+});
