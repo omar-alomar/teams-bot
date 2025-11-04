@@ -9,19 +9,32 @@ import {
   WebRequest,
   WebResponse,
 } from 'botbuilder';
+import { McpHttpClient } from "./mcpClient";
+
+// create reusable client (one session)
+const mcp = new McpHttpClient(process.env.MCP_BASE ?? "http://mcp:8080/mcp");
 
 // ---------- ENV ----------
 const PORT = Number(process.env.PORT) || 3978;
-const APP_ID = process.env.MS_APP_ID!;
-const APP_PASSWORD = process.env.MS_APP_PASSWORD!;
-const APP_TENANT = process.env.MS_APP_TENANT_ID;   // optional, required for SingleTenant
-const APP_TYPE = (process.env.MS_APP_TYPE || 'MultiTenant') as 'SingleTenant' | 'MultiTenant';
+const APP_ID = process.env.MS_APP_ID?.trim();
+const APP_PASSWORD = process.env.MS_APP_PASSWORD?.trim();
+const APP_TENANT = process.env.MS_TENANT_ID?.trim() || undefined;   // required for SingleTenant
+const APP_TYPE = (process.env.MS_APP_TYPE?.trim() || 'SingleTenant') as 'SingleTenant' | 'MultiTenant';
+
+// Validate required env vars
+if (!APP_ID) {
+  throw new Error('MS_APP_ID is required');
+}
+if (!APP_PASSWORD) {
+  throw new Error('MS_APP_PASSWORD is required');
+}
 
 // Validate configuration
 if (APP_TYPE === 'SingleTenant' && !APP_TENANT) {
   throw new Error(
-    'MS_APP_TENANT_ID is required when MS_APP_TYPE is SingleTenant. ' +
-    'Either set MS_APP_TENANT_ID in your .env file or change MS_APP_TYPE to MultiTenant.'
+    'MS_TENANT_ID is required for SingleTenant mode. ' +
+    'Please set MS_TENANT_ID in your .env file. ' +
+    `You can find your tenant ID in the 'x-ms-tenant-id' header of incoming Teams requests.`
   );
 }
 
@@ -32,12 +45,12 @@ const credFactoryConfig: {
   MicrosoftAppType: 'SingleTenant' | 'MultiTenant';
   MicrosoftAppTenantId?: string;
 } = {
-  MicrosoftAppId: APP_ID,
-  MicrosoftAppPassword: APP_PASSWORD,
+  MicrosoftAppId: APP_ID!,
+  MicrosoftAppPassword: APP_PASSWORD!,
   MicrosoftAppType: APP_TYPE,
 };
 
-// Only include tenant ID if provided (required for SingleTenant, optional for MultiTenant)
+// Include tenant ID (required for SingleTenant, optional for MultiTenant)
 if (APP_TENANT) {
   credFactoryConfig.MicrosoftAppTenantId = APP_TENANT;
 }
@@ -50,7 +63,49 @@ const adapter = new CloudAdapter(bfa);
 const bot = new ActivityHandler();
 bot.onMessage(async (context: TurnContext, next) => {
   const txt = (context.activity.text || '').trim();
-  await context.sendActivity(`Echo: ${txt}`);
+  await context.sendActivity(`Goofy nigga says: ${txt}`);
+  // ensure MCP session once
+  try { await mcp.init(); } catch (e:any) {
+    await context.sendActivity(`MCP init failed: ${e.message}`);
+    return;
+  }
+
+  if (txt === "/ping") {
+    const r = await mcp.listResources();
+    const n = r?.resources?.length ?? 0;
+    await context.sendActivity(`✅ MCP alive. ${n} resources.`);
+    return;
+  }
+
+  if (txt === "/users") {
+    const out = await mcp.readResource("users://all");
+    const body = out?.contents?.[0]?.text ?? "[]";
+    // Teams has a message limit of ~28KB, so we'll send up to ~25KB to be safe
+    const maxLength = 25000;
+    if (body.length > maxLength) {
+      await context.sendActivity(`👤 Users (showing first ${maxLength} chars of ${body.length}):\n\`\`\`\n${body.slice(0, maxLength)}\n\`\`\``);
+      await context.sendActivity(`... (truncated ${body.length - maxLength} more characters)`);
+    } else {
+      await context.sendActivity(`👤 Users:\n\`\`\`\n${body}\n\`\`\``);
+    }
+    return;
+  }
+
+  if (txt === "/projects") {
+    const out = await mcp.readResource("projects://all");
+    const body = out?.contents?.[0]?.text ?? "[]";
+    // Teams has a message limit of ~28KB, so we'll send up to ~25KB to be safe
+    const maxLength = 25000;
+    if (body.length > maxLength) {
+      await context.sendActivity(`📁 Projects (showing first ${maxLength} chars of ${body.length}):\n\`\`\`\n${body.slice(0, maxLength)}\n\`\`\``);
+      await context.sendActivity(`... (truncated ${body.length - maxLength} more characters)`);
+    } else {
+      await context.sendActivity(`📁 Projects:\n\`\`\`\n${body}\n\`\`\``);
+    }
+    return;
+  }
+
+  await context.sendActivity("Commands: `/ping`, `/users`, `/projects`");
   await next();
 });
 
@@ -136,7 +191,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log('APP_ID:', APP_ID);
-  console.log('TENANT:', APP_TENANT || '(not set - using MultiTenant)');
+  console.log('TENANT:', APP_TENANT || '(not set)');
   console.log('TYPE:', APP_TYPE);
   console.log(`Bot listening on port ${PORT}`);
 });
