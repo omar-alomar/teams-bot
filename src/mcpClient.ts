@@ -123,12 +123,24 @@ export type JsonRpc = {
   
       const requestBody = JSON.stringify({ jsonrpc: "2.0", id: this.id++, ...body });
       
-      const res = await fetch(this.base, {
-        method: "POST",
-        headers,
-        body: requestBody,
-        signal,
-      });
+      let res: Response;
+      try {
+        res = await fetch(this.base, {
+          method: "POST",
+          headers,
+          body: requestBody,
+          signal,
+        });
+      } catch (error: any) {
+        // Handle network errors, DNS failures, connection timeouts, etc.
+        const errorMessage = error.message || String(error);
+        throw new Error(
+          `Failed to connect to MCP server at ${this.base}. ` +
+          `This could be due to network issues, DNS resolution failure, or the MCP server being unreachable. ` +
+          `Error: ${errorMessage}. ` +
+          `Please check your MCP_BASE environment variable (currently: ${this.base}) and ensure the MCP server is running and accessible.`
+        );
+      }
   
       // Capture session id from response header (server generates it on initialize)
       if (!this.sid) {
